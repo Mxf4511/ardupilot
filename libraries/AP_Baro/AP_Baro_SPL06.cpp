@@ -70,8 +70,8 @@ extern const AP_HAL::HAL &hal;
 #define SPL06_TEMPERATURE_RESULT_BIT_SHIFT     (1<<3)  // necessary for temperature oversampling > 8
 
 // Don't set oversampling higher than 8 or the measurement time will be higher than 20ms (timer period)
-#define SPL06_PRESSURE_OVERSAMPLING            8
-#define SPL06_TEMPERATURE_OVERSAMPLING         8
+#define SPL06_PRESSURE_OVERSAMPLING            16
+#define SPL06_TEMPERATURE_OVERSAMPLING         16
 
 #define SPL06_OVERSAMPLING_TO_REG_VALUE(n)     (ffs(n)-1)
 
@@ -352,7 +352,7 @@ void AP_Baro_SPL06::_update_pressure(int32_t press_raw)
 		break;
 	case Type::SPA06:
 		pressure_cal = (float)_c00 + press_raw_sc * ((float)_c10 + press_raw_sc * ((float)_c20 + press_raw_sc * ((float)_c30 + press_raw_sc * _c40)));
-		press_temp_comp = _temp_raw * ((float)_c01 + press_raw_sc * ((float)_c11 + press_raw_sc * ((float)_c21) + press_raw_sc * _c31));
+		press_temp_comp = _temp_raw * ((float)_c01 + press_raw_sc * ((float)_c11 + press_raw_sc * ((float)_c21 + press_raw_sc * _c31)));
 		break;
 	default:
 		break;

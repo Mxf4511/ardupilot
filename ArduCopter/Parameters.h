@@ -564,6 +564,9 @@ public:
 
     // Additional pilot velocity items
     AP_Int16    pilot_speed_dn;
+    AP_Int16    pilot_dn_alt_high;
+    AP_Int16    pilot_dn_alt_low;
+    AP_Int16    pilot_speed_dn_low;
 
     // Land alt final stage
     AP_Int16 land_alt_low;

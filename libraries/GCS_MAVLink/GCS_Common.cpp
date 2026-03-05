@@ -4576,6 +4576,18 @@ void GCS_MAVLINK::send_banner()
     const AP_FWVersion &fwver = AP::fwversion();
 
     send_text(MAV_SEVERITY_INFO, "%s", fwver.fw_string);
+#ifdef AP_INTERNAL_VERSION
+    if (fwver.os_sw_version > 0U) {
+        const unsigned year = fwver.os_sw_version / 10000U;
+        const unsigned month = (fwver.os_sw_version / 100U) % 100U;
+        const unsigned day = fwver.os_sw_version % 100U;
+        send_text(MAV_SEVERITY_INFO, "CHG_VER: %s %04u-%02u-%02u %s",
+                  AP_INTERNAL_VERSION, year, month, day, __TIME__);
+    } else {
+        send_text(MAV_SEVERITY_INFO, "INT_VER: %s %s %s",
+                  AP_INTERNAL_VERSION, __DATE__, __TIME__);
+    }
+#endif
 
     if (fwver.middleware_name && fwver.os_name) {
         send_text(MAV_SEVERITY_INFO, "%s: %s %s: %s",

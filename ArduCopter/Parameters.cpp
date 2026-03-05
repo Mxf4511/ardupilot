@@ -1232,6 +1232,33 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @User: Advanced
     AP_GROUPINFO("FS_EKF_FILT", 8, ParametersG2, fs_ekf_filt_hz, FS_EKF_FILT_DEFAULT),
 
+    // @Param: PILOT_DN_ALT_HI
+    // @DisplayName: Pilot descend high altitude threshold
+    // @Description: Height above ground in cm where pilot descend speed transitions from PILOT_SPEED_DN to PILOT_SPD_DN_MID
+    // @Units: cm
+    // @Range: 0 10000
+    // @Increment: 10
+    // @User: Advanced
+    AP_GROUPINFO("PILOT_DN_ALT_HI", 9, ParametersG2, pilot_dn_alt_high, 1000),
+
+    // @Param: PILOT_DN_ALT_LO
+    // @DisplayName: Pilot descend low altitude threshold
+    // @Description: Height above ground in cm where pilot descend speed transitions from PILOT_SPD_DN_MID to PILOT_SPD_DN_LOW
+    // @Units: cm
+    // @Range: 0 10000
+    // @Increment: 10
+    // @User: Advanced
+    AP_GROUPINFO("PILOT_DN_ALT_LO", 10, ParametersG2, pilot_dn_alt_low, 100),
+
+    // @Param: PILOT_SPD_DN_LOW
+    // @DisplayName: Pilot descend speed low altitude
+    // @Description: Maximum pilot requested vertical descending velocity in cm/s below PILOT_DN_ALT_LO
+    // @Units: cm/s
+    // @Range: 0 500
+    // @Increment: 10
+    // @User: Advanced
+    AP_GROUPINFO("PILOT_SPD_DN_LOW", 11, ParametersG2, pilot_speed_dn_low, 0),
+
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
 
     AP_GROUPEND
