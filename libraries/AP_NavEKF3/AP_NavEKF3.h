@@ -103,6 +103,9 @@ public:
     //returns index of the active source set used
     uint8_t get_active_source_set() const;
 
+    // return the configured height source (POSZ) for the active source set
+    AP_NavEKF_Source::SourceZ getPosZSource() const { return sources.getPosZSource(); }
+
     // reset body axis gyro bias estimates
     void resetGyroBias(void);
 

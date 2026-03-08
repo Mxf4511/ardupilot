@@ -459,15 +459,39 @@ bool AP_Arming_Copter::mandatory_gps_checks(bool display_failure)
 
     if (mode_requires_gps || require_location == RequireLocation::YES) {
         if (!copter.position_ok()) {
-            // vehicle level position estimate checks
-            check_failed(display_failure, "Need Position Estimate");
-            return false;
+#if AP_RANGEFINDER_ENABLED && HAL_NAVEKF3_AVAILABLE
+            // When EK3_SRCx POSZ uses GPS: require position (GPS) to arm - no bypass.
+            // When EK3_SRCx POSZ uses rangefinder: also allow arming when rangefinder is OutOfRangeLow.
+            const bool ek3_posz_rangefinder = (ahrs.get_ekf_type() == 3 &&
+                AP::ahrs().EKF3.getPosZSource() == AP_NavEKF_Source::SourceZ::RANGEFINDER);
+            if (ek3_posz_rangefinder &&
+                copter.rangefinder_state.enabled &&
+                (copter.rangefinder.status_orient(ROTATION_PITCH_270) == RangeFinder::Status::OutOfRangeLow)) {
+                // allow: height source is rangefinder and rangefinder below min
+            } else
+#endif
+            {
+                // vehicle level position estimate checks
+                check_failed(display_failure, "Need Position Estimate");
+                return false;
+            }
         }
     } else if (fence_requires_gps) {
         if (!copter.position_ok()) {
-            // clarify to user why they need GPS in non-GPS flight mode
-            check_failed(display_failure, "Fence enabled, need position estimate");
-            return false;
+#if AP_RANGEFINDER_ENABLED && HAL_NAVEKF3_AVAILABLE
+            const bool ek3_posz_rangefinder = (ahrs.get_ekf_type() == 3 &&
+                AP::ahrs().EKF3.getPosZSource() == AP_NavEKF_Source::SourceZ::RANGEFINDER);
+            if (ek3_posz_rangefinder &&
+                copter.rangefinder_state.enabled &&
+                (copter.rangefinder.status_orient(ROTATION_PITCH_270) == RangeFinder::Status::OutOfRangeLow)) {
+                // allow: height source is rangefinder and rangefinder below min
+            } else
+#endif
+            {
+                // clarify to user why they need GPS in non-GPS flight mode
+                check_failed(display_failure, "Fence enabled, need position estimate");
+                return false;
+            }
         }
     } else {
         // return true if GPS is not required

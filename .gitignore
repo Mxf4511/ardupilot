@@ -191,3 +191,4 @@ autotest_result_*_junit.xml
 设备参数/重置参数后高度不飘_2026-02-28_filtered.param
 设备参数/重置参数后高度不飘_2026-02-28.param
 .clangd
+设备参数/ardupilot_param.param
