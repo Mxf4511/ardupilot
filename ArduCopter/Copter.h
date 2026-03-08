@@ -726,6 +726,8 @@ private:
     void set_accel_throttle_I_from_pilot_throttle();
     void rotate_body_frame_to_NE(float &x, float &y);
     uint16_t get_pilot_speed_dn() const;
+    /// get altitude-dependent max descent speed in cm/s (positive value) for 3-stage descent and rangefinder/EK3 logic
+    float get_max_descent_speed_cms() const;
     void run_rate_controller();
 
 #if AC_CUSTOMCONTROL_MULTI_ENABLED

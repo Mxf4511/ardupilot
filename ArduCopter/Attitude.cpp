@@ -124,12 +124,72 @@ void Copter::rotate_body_frame_to_NE(float &x, float &y)
     y = ne_y;
 }
 
+// Compute altitude-dependent max descent speed (positive cm/s) for 3-stage descent and rangefinder/EK3 logic per readme
+float Copter::get_max_descent_speed_cms() const
+{
+    const float speed_dn = (g2.pilot_speed_dn > 0) ? (float)abs(g2.pilot_speed_dn) : (float)abs(g.pilot_speed_up);
+    const float speed_dn_low = (float)abs(g2.pilot_speed_dn_low);
+    const float alt_hi = (float)g2.pilot_dn_alt_high;
+    const float alt_lo = (float)g2.pilot_dn_alt_low;
+
+    if (alt_hi <= alt_lo) {
+        return speed_dn;
+    }
+
+    const float rel_alt_cm = (float)current_loc.alt;
+    bool rngf_valid = false;
+    float rngf_alt_cm = 0.0f;
+    int32_t rngf_alt_cm_i = 0;
+#if AP_RANGEFINDER_ENABLED
+    rngf_valid = rangefinder_alt_ok() && get_rangefinder_height_interpolated_cm(rngf_alt_cm_i);
+    rngf_alt_cm = (float)rngf_alt_cm_i;
+    const int16_t rf_max_cm_i = rangefinder.max_distance_cm_orient(ROTATION_PITCH_270);
+    const float rf_max_cm = (rf_max_cm_i > 0) ? (float)rf_max_cm_i : 0.0f;
+#else
+    const float rf_max_cm = 0.0f;
+#endif
+
+    // Helper: max descent speed for a given height using standard 3-stage (scenario a)
+    const auto speed_at_height = [&](float alt_cm) {
+        if (alt_cm >= alt_hi) {
+            return speed_dn;
+        }
+        if (alt_cm <= alt_lo) {
+            return speed_dn_low;
+        }
+        return linear_interpolate(speed_dn_low, speed_dn, alt_cm, alt_lo, alt_hi);
+    };
+
+    // (c) Land higher than takeoff: rel_alt > rf_max and rangefinder valid -> use rangefinder height, linear from rf_max->PILOT_SPEED_DN to 0->PILOT_SPD_DN_LOW
+#if AP_RANGEFINDER_ENABLED
+    if (rf_max_cm > 0.0f && rngf_valid && rel_alt_cm > rf_max_cm) {
+        const float rngf_clamped = constrain_float(rngf_alt_cm, 0.0f, rf_max_cm);
+        return linear_interpolate(speed_dn_low, speed_dn, rngf_clamped, alt_lo, rf_max_cm);
+    }
+#endif
+
+    // Height for standard calculation: prefer rangefinder when valid, else EK3 relative altitude
+    const float alt_for_speed = rngf_valid ? rngf_alt_cm : rel_alt_cm;
+    float speed = speed_at_height(alt_for_speed);
+
+    // (b) Land lower than takeoff: rel_alt < 70%*rf_max and rangefinder invalid -> clamp to speed at 70%*rf_max (do not reduce further)
+#if AP_RANGEFINDER_ENABLED
+    if (rf_max_cm > 0.0f && !rngf_valid && rel_alt_cm < 0.7f * rf_max_cm) {
+        const float speed_at_70 = speed_at_height(0.7f * rf_max_cm);
+        speed = MAX(speed, speed_at_70);
+    }
+#endif
+
+    return speed;
+}
+
 // It will return the PILOT_SPEED_DN value if non zero, otherwise if zero it returns the PILOT_SPEED_UP value.
+// When PILOT_SPEED_DN is set, returns altitude-dependent max descent speed (rangefinder/EK3 3-stage logic).
 uint16_t Copter::get_pilot_speed_dn() const
 {
     if (g2.pilot_speed_dn == 0) {
-        return abs(g.pilot_speed_up);
-    } else {
-        return abs(g2.pilot_speed_dn);
+        return (uint16_t)abs(g.pilot_speed_up);
     }
+    const float speed = get_max_descent_speed_cms();
+    return (uint16_t)constrain_float(speed, 0.0f, 65535.0f);
 }

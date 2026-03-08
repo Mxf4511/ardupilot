@@ -729,6 +729,19 @@ void Copter::one_hz_loop()
 #if AC_CUSTOMCONTROL_MULTI_ENABLED
     custom_control.set_notch_sample_rate(AP::scheduler().get_filtered_loop_rate_hz());
 #endif
+
+    // log current height and max descent speed once per second (when armed and PILOT_SPEED_DN used)
+    if (motors->armed() && (g2.pilot_speed_dn > 0)) {
+        int32_t alt_cm = current_loc.alt;
+#if AP_RANGEFINDER_ENABLED
+        int32_t rngf_alt_cm = 0;
+        if (rangefinder_alt_ok() && get_rangefinder_height_interpolated_cm(rngf_alt_cm)) {
+            alt_cm = rngf_alt_cm;
+        }
+#endif
+        const float max_dn_cms = get_max_descent_speed_cms();
+        gcs().send_text(MAV_SEVERITY_INFO, "DnSpd: alt=%ld cm max_dn=%.0f cm/s", (long)alt_cm, (double)max_dn_cms);
+    }
 }
 
 void Copter::init_simple_bearing()
