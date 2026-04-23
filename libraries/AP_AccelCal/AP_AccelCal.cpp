@@ -23,7 +23,8 @@
 
 #define _printf(fmt, args ...) do {                                     \
         if (_gcs != nullptr) {                                          \
-            _gcs->send_text(MAV_SEVERITY_CRITICAL, fmt, ## args);       \
+            /*_gcs->send_text(MAV_SEVERITY_CRITICAL, fmt, ## args);       \*/ \
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, fmt, ## args);         \
         }                                                               \
     } while (0)
 

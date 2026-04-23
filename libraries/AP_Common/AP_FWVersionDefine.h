@@ -30,7 +30,8 @@
 #define ACTIVE_FWSTR AP_CUSTOM_FIRMWARE_STRING
 #define ORIGINAL_FWSTR THISFIRMWARE
 #else
-#define ACTIVE_FWSTR THISFIRMWARE
+// #define ACTIVE_FWSTR THISFIRMWARE
+#define ACTIVE_FWSTR "CHG_VERSION"  //change FWSTR to Using AP_INTERNAL_VERSION in hwdef.dat
 #define ORIGINAL_FWSTR nullptr
 #endif
 
@@ -60,7 +61,7 @@ const AP_FWVersion AP_FWVersion::fwver{
 #endif
 #ifndef GIT_VERSION
     .fw_string = ACTIVE_FWSTR,
-    .fw_hash_str = "",
+    .fw_hash_str = AP_INTERNAL_VERSION,
 #else
     .fw_string = ACTIVE_FWSTR " (" GIT_VERSION ")",
     .fw_hash_str = GIT_VERSION,

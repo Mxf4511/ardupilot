@@ -1,5 +1,6 @@
 {
     "recommendations": [
+        "llvm-vs-code-extensions.vscode-clangd",
         "augustocdias.tasks-shell-input",
         "bierner.markdown-mermaid",
         "ms-vscode.cpptools",

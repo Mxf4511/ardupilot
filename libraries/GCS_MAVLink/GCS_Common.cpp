@@ -3329,20 +3329,44 @@ void GCS_MAVLINK::send_servo_output_raw()
 }
 
 
+// void GCS_MAVLINK::send_accelcal_vehicle_position(uint32_t position)
+// {
+//     if (HAVE_PAYLOAD_SPACE(chan, COMMAND_LONG)) {
+//         mavlink_msg_command_long_send(
+//             chan,
+//             0,
+//             0,
+//             MAV_CMD_ACCELCAL_VEHICLE_POS,
+//             0,
+//             (float) position,
+//             0, 0, 0, 0, 0, 0);
+//     }
+// }
+// Broadcast MAV_CMD_ACCELCAL_VEHICLE_POS to all active MAVLink channels
+
 void GCS_MAVLINK::send_accelcal_vehicle_position(uint32_t position)
 {
-    if (HAVE_PAYLOAD_SPACE(chan, COMMAND_LONG)) {
-        mavlink_msg_command_long_send(
-            chan,
-            0,
-            0,
-            MAV_CMD_ACCELCAL_VEHICLE_POS,
-            0,
-            (float) position,
-            0, 0, 0, 0, 0, 0);
+    const float param = (float)position;
+
+    for (uint8_t i = 0; i < MAVLINK_COMM_NUM_BUFFERS; i++) {
+        GCS_MAVLINK *link = gcs().chan(i);
+        if (link == nullptr) {
+            continue;
+        }
+
+        mavlink_channel_t link_chan = link->get_chan();
+        if (HAVE_PAYLOAD_SPACE(link_chan, COMMAND_LONG)) {
+            mavlink_msg_command_long_send(
+                link_chan,
+                0,                          // target_system
+                0,                          // target_component
+                MAV_CMD_ACCELCAL_VEHICLE_POS,
+                0,                          // confirmation
+                param,                      // param1 = position
+                0, 0, 0, 0, 0, 0);          // other params
+        }
     }
 }
-
 
 float GCS_MAVLINK::vfr_hud_airspeed() const
 {
@@ -4581,7 +4605,7 @@ void GCS_MAVLINK::send_banner()
         const unsigned year = fwver.os_sw_version / 10000U;
         const unsigned month = (fwver.os_sw_version / 100U) % 100U;
         const unsigned day = fwver.os_sw_version % 100U;
-        send_text(MAV_SEVERITY_INFO, "CHG_VER: %s %04u-%02u-%02u %s",
+        send_text(MAV_SEVERITY_INFO, "CHG_VER: V%s %04u-%02u-%02u %s",
                   AP_INTERNAL_VERSION, year, month, day, __TIME__);
     } else {
         send_text(MAV_SEVERITY_INFO, "INT_VER: %s %s %s",
