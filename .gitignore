@@ -175,6 +175,8 @@ autotest_result_*_junit.xml
 # Ignore ESP-IDF SDK defines
 /libraries/AP_HAL_ESP32/targets/esp32/esp-idf/sdkconfig
 /libraries/AP_HAL_ESP32/targets/esp32s3/esp-idf/sdkconfig
+日志分析/
+设备参数/
 设备参数/apm_param_ignor.txt
 设备参数/DVT1#_BIDSHOT_调参_定高平飞_光流定点OK_高度超调_26-2-26.param
 设备参数/DVT1#_备份_降落基本OK_filtered.param

@@ -106,6 +106,13 @@ function update()
   local gps_speed_accuracy = gps:speed_accuracy(gps:primary_sensor())
   local gps_over_threshold = (gps_speed_accuracy == nil) or (gps:speed_accuracy(gps:primary_sensor()) > gps_speedaccuracy_thresh)
   local gps_usable = (gps_speed_accuracy ~= nil) and (gps_speed_accuracy <= gps_usable_accuracy)
+  local gps_horizontal_accuracy = gps:horizontal_accuracy(gps:primary_sensor())
+  local gps_vertical_accuracy = gps:vertical_accuracy(gps:primary_sensor())
+  local gps_position_accuracy = nil
+  if (gps_horizontal_accuracy ~= nil) and (gps_vertical_accuracy ~= nil) then
+    gps_position_accuracy = math.sqrt(gps_horizontal_accuracy * gps_horizontal_accuracy +
+                                      gps_vertical_accuracy * gps_vertical_accuracy)
+  end
 
   -- check optical flow quality
   local opticalflow_quality = 0
@@ -201,6 +208,15 @@ function update()
         opticalflow_quality_thresh,
         opticalflow_xy_innov,
         opticalflow_innov_thresh_active
+      )
+    )
+    gcs:send_text(
+      6,
+      string.format(
+        "GPShAcc:%s GPSvAcc:%s GPSpAcc:%s",
+        gps_horizontal_accuracy and string.format("%.2f", gps_horizontal_accuracy) or "nil",
+        gps_vertical_accuracy and string.format("%.2f", gps_vertical_accuracy) or "nil",
+        gps_position_accuracy and string.format("%.2f", gps_position_accuracy) or "nil"
       )
     )
   end
