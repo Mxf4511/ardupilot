@@ -132,11 +132,11 @@ void AP_InertialSensor_Backend::_rotate_and_correct_accel(uint8_t instance, Vect
         accel -= _imu._accel_offset(instance);
 
 
-        // apply scaling
+        // apply scaling, protect against uncalibrated scale of zero
         const Vector3f &accel_scale = _imu._accel_scale(instance).get();
-        accel.x *= accel_scale.x;
-        accel.y *= accel_scale.y;
-        accel.z *= accel_scale.z;
+        accel.x *= is_zero(accel_scale.x) ? 1.0f : accel_scale.x;
+        accel.y *= is_zero(accel_scale.y) ? 1.0f : accel_scale.y;
+        accel.z *= is_zero(accel_scale.z) ? 1.0f : accel_scale.z;
     }
 
     // rotate to body frame

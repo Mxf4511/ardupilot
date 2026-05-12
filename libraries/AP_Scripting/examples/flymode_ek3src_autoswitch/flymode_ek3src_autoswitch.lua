@@ -6,7 +6,7 @@
 --   Configure a downward facing rangefinder
 --
 --   EK3_SRC1_POSXY = 3 (GPS)
---   EK3_SRC1_POSZ  = 2 (Baro)
+--   EK3_SRC1_POSZ  = 2 (RangeFinder; script keeps SRC1/2 POSZ fixed to rangefinder)
 --   EK3_SRC1_VELXY = 3 (GPS)
 --   EK3_SRC1_VELZ  = 3 (GPS)
 --   EK3_SRC1_YAW   = 1 (Compass)
@@ -25,12 +25,18 @@
 --
 --   EK3_SRC_OPTIONS = 0 (Do not fuse all velocities)
 --
+-- md §1: MODE_MD1_AUTO (4) = script auto AltHold<->Loiter; MODE_MD1_MANUAL (6) = fixed SRC3.
+--   Stock Copter: 4=GUIDED, 6=RTL — map FLTMODE or change constants to match your airframe doc.
+--
 -- Tuning parameters (via SCR_USERn):
 --   SCR_USER1 = GPS speed accuracy threshold (m/s), default 0.5
---   SCR_USER2 = GPS position accuracy threshold (m), sqrt(hacc^2+vacc^2), default 2.0
---   SCR_USER3 = GPS minimum satellite count, default 8
 --   SCR_USER4 = optical flow quality threshold, default 50
 --   SCR_USER5 = optical flow innovation threshold, default 0.15
+--
+-- GPS hAcc/vAcc: gps:horizontal_accuracy(i) / vertical_accuracy(i) / speed_accuracy(i) each return
+-- number|nil (see docs.lua), not (boolean, number). Use a single return value per call.
+--
+-- SRC1/SRC2 POSZ: fixed RangeFinder (ensure_src12_posz_rangefinder).
 --
 -- Anti-chatter (noisy sensors / bench): Loiter -> AltHold uses DEGRADE_DWELL_TICKS (no arm / flying / HAGL gate).
 --
@@ -41,40 +47,44 @@
 -- Constants
 local COPTER_MODE_ALT_HOLD = 2
 local COPTER_MODE_LOITER   = 5
+-- flymode_ek3src_autoswitch.md §1 (flight mode numbers from vehicle:get_mode())
+local MODE_MD1_AUTO   = 4
+local MODE_MD1_MANUAL = 6
 local RANGEFINDER_ROTATION = 25  -- downward facing (ROTATION_PITCH_90)
 local UPDATE_INTERVAL_MS   = 100 -- 10Hz update rate
 local VOTE_COUNTER_MAX     = 10  -- votes needed to switch (2 seconds at 10Hz)
 local LOG_INTERVAL_MS      = 2000
-local RF_ALT_RATIO         = 0.9 -- rangefinder max range ratio for alt source switching
-local RF_HYST_CENTER       = 0.8 -- new requirement: center of RF hysteresis comparator
-local RF_HYST_WIDTH        = 0.1 -- hysteresis half-width around center (0.8 +/- 0.1)
+-- RangeFinder::Status from rangefinder:status_orient (see AP_RangeFinder.h)
+local RF_STATUS_GOOD       = 4
 -- Dwell: consecutive update() calls at UPDATE_INTERVAL_MS before auto mode change (reduces ground / RF jitter)
 local DEGRADE_DWELL_TICKS  = 30  -- Loiter -> AltHold when both nav bad (~3 s at 100 ms)
-local EK3_POSZ_BARO        = 1
 local EK3_POSZ_RANGEFINDER = 2
-local EK3_POSZ_GPS         = 3
+-- GPS OK (for voting): satellites strictly > 15; p_acc = sqrt(h^2+v^2) strictly < 1 m
+local GPS_OK_MIN_SATS_EXCLUSIVE = 15
+local GPS_OK_MAX_POS_ACC_M      = 1.0
 
 -- State variables
 local source_prev          = ahrs:get_posvelyaw_source_set()
 local gps_vs_flow_vote     = 0   -- negative = GPS, positive = optical flow
 -- Start negative so the first telemetry block can send as soon as we enter AltHold/Loiter
 local last_log_ms          = -LOG_INTERVAL_MS
-local auto_mode_engaged    = false  -- true when script is managing the mode
+local auto_mode_engaged    = false  -- Loiter GPS/flow voting (false after script degrade until Loiter again)
+local md1_auto_armed       = false  -- md §1: true after mode 4 until mode 6 or non-(2|5) flight mode
+local manual_to_auto_bridge = false -- md §2: 6->4: stay AltHold+SRC3 until §5 nav ready, then Loiter+SRC
 local boot_announced       = false
 local bad_nav_streak       = 0   -- Loiter: consecutive cycles with GPS and flow both bad
-local rf_hyst_use_rangefinder = true -- md §1: boot defaults to rangefinder height source
 local posz_prev = -1
 local prev_flow_innov_xy = nil
 local last_loiter_retry_ms = 0
+-- md §1: mode 6 => manual (m:1); mode 4 => auto branch (a:1 after Loiter retry). Script degrade sets a:0 without m:1.
+local user_manual_althold = false
 
 -- Initialise parameters
 local scr_user1 = Parameter('SCR_USER1')  -- GPS speed accuracy threshold
-local scr_user2 = Parameter('SCR_USER2')  -- GPS position accuracy threshold (sqrt(hacc^2+vacc^2))
-local scr_user3 = Parameter('SCR_USER3')  -- GPS minimum satellite count
 local scr_user4 = Parameter('SCR_USER4')  -- optical flow quality threshold
 local scr_user5 = Parameter('SCR_USER5')  -- optical flow innovation threshold
 
--- EK3 tertiary set: baro height, compass yaw, no horizontal pos/vel (see flymode_ek3src_autoswitch.md §5)
+-- EK3 tertiary set: baro height, compass yaw, no horizontal pos/vel (see flymode_ek3src_autoswitch.md §7)
 local ek3_src3_posxy = Parameter('EK3_SRC3_POSXY')
 local ek3_src3_posz = Parameter('EK3_SRC3_POSZ')
 local ek3_src3_velxy = Parameter('EK3_SRC3_VELXY')
@@ -135,6 +145,11 @@ local function set_src12_posz(posz_source)
   end
 end
 
+-- SRC1/SRC2 vertical position: always rangefinder (no Baro/GPS Z switching).
+local function ensure_src12_posz_rangefinder()
+  set_src12_posz(EK3_POSZ_RANGEFINDER)
+end
+
 -- Get parameter value with a default fallback
 local function get_param(param_obj, default_val)
   local v = param_obj:get()
@@ -144,58 +159,9 @@ local function get_param(param_obj, default_val)
   return v
 end
 
--- Check rangefinder altitude and return which EKF alt source set to use
--- Returns true if rangefinder should be used for altitude, false if baro
-local function rangefinder_alt_usable()
-  if not rangefinder:has_data_orient(RANGEFINDER_ROTATION) then
-    return false
-  end
-  local rngfnd_dist_cm = rangefinder:distance_cm_orient(RANGEFINDER_ROTATION)
-  local rngfnd_max_cm  = rangefinder:max_distance_cm_orient(RANGEFINDER_ROTATION)
-  if rngfnd_max_cm == 0 then
-    return false
-  end
-  -- usable when distance <= 90% of max range
-  return rngfnd_dist_cm <= (rngfnd_max_cm * RF_ALT_RATIO)
-end
-
-local function update_height_source_with_hysteresis(current_mode, gps_ok, gps_nav_active, rngfnd_has_data, rngfnd_dist_m, rngfnd_max_m)
-  if not rngfnd_has_data or rngfnd_max_m <= 0 then
-    rf_hyst_use_rangefinder = false
-  else
-    local hi = (RF_HYST_CENTER + RF_HYST_WIDTH) * rngfnd_max_m
-    local lo = (RF_HYST_CENTER - RF_HYST_WIDTH) * rngfnd_max_m
-    if rf_hyst_use_rangefinder then
-      if rngfnd_dist_m > hi then
-        rf_hyst_use_rangefinder = false
-      end
-    else
-      if rngfnd_dist_m < lo then
-        rf_hyst_use_rangefinder = true
-      end
-    end
-  end
-
-  if rf_hyst_use_rangefinder then
-    set_src12_posz(EK3_POSZ_RANGEFINDER)
-    return
-  end
-
-  -- High altitude branch:
-  -- AltHold: always Baro
-  -- Loiter: GPS height only when GPS quality is good and GPS is active nav source
-  if current_mode == COPTER_MODE_ALT_HOLD then
-    set_src12_posz(EK3_POSZ_BARO)
-  elseif current_mode == COPTER_MODE_LOITER and gps_ok and gps_nav_active then
-    set_src12_posz(EK3_POSZ_GPS)
-  else
-    set_src12_posz(EK3_POSZ_BARO)
-  end
-end
-
 -- Check GPS quality for voting
--- Returns true if GPS meets all thresholds
-local function gps_quality_ok(gps_speed_acc_thresh, gps_pos_acc_thresh, gps_min_sats)
+-- Returns true if GPS meets all thresholds (sats > 15, p_acc < 1 m, plus 3D fix and speed gate)
+local function gps_quality_ok(gps_speed_acc_thresh)
   local primary = gps:primary_sensor()
 
   -- Must have at least 3D fix
@@ -203,26 +169,25 @@ local function gps_quality_ok(gps_speed_acc_thresh, gps_pos_acc_thresh, gps_min_
     return false
   end
 
-  -- Satellite count
-  if gps:num_sats(primary) < gps_min_sats then
+  -- Satellite count: strictly more than 15 (>= 16)
+  if gps:num_sats(primary) <= GPS_OK_MIN_SATS_EXCLUSIVE then
     return false
   end
 
-  -- Speed accuracy
-  local ok_sa, speed_acc = gps:speed_accuracy(primary)
-  if (not ok_sa) or (speed_acc == nil) or (speed_acc > gps_speed_acc_thresh) then
+  -- Speed accuracy (m/s); nil if driver does not provide it
+  local speed_acc = gps:speed_accuracy(primary)
+  if (speed_acc == nil) or (speed_acc > gps_speed_acc_thresh) then
     return false
   end
 
-  -- Position accuracy = sqrt(hacc^2 + vacc^2)
-  local ok_ha, h_acc = gps:horizontal_accuracy(primary)
-  local ok_va, v_acc = gps:vertical_accuracy(primary)
-  if (ok_ha and h_acc) and (ok_va and v_acc) then
-    local pos_acc = math.sqrt(h_acc * h_acc + v_acc * v_acc)
-    if pos_acc > gps_pos_acc_thresh then
-      return false
-    end
-  else
+  -- p_acc = sqrt(hacc^2 + vacc^2); must be < 1 m when both components available
+  local h_acc = gps:horizontal_accuracy(primary)
+  local v_acc = gps:vertical_accuracy(primary)
+  if (h_acc == nil) or (v_acc == nil) then
+    return false
+  end
+  local pos_acc = math.sqrt(h_acc * h_acc + v_acc * v_acc)
+  if pos_acc >= GPS_OK_MAX_POS_ACC_M then
     return false
   end
 
@@ -301,6 +266,7 @@ function update()
 
   if not boot_announced then
     boot_announced = true
+    ensure_src12_posz_rangefinder()
     -- MAV_SEVERITY_WARNING (4): default Mission Planner / QGC filters often hide INFO (6)
     gcs:send_text(4, "flymode_ek3src: script running")
     notify:send_text("ek3src run", 0)
@@ -308,187 +274,263 @@ function update()
 
   -- Read tuning parameters
   local gps_speed_acc_thresh  = get_param(scr_user1, 0.5)
-  local gps_pos_acc_thresh     = get_param(scr_user2, 2.0)
-  local gps_min_sats          = get_param(scr_user3, 8)
   local flow_quality_thresh   = get_param(scr_user4, 50)
   local flow_innov_thresh     = get_param(scr_user5, 0.15)
 
   local current_mode = vehicle:get_mode()
   local mode_changed, old_mode = detect_user_mode_change(current_mode)
 
-  -- Detect manual mode transitions:
-  -- If user manually switches TO Loiter, engage auto logic
-  -- If user manually switches FROM Loiter to AltHold, disengage auto logic
-  -- If user manually switches to AltHold (not from our auto logic), use Source3 fallback
+  -- md §1: mode 4 = auto (engage + jump to AltHold); mode 6 = manual SRC3 only.
   if mode_changed then
-    if current_mode == COPTER_MODE_LOITER then
-      -- User selected Loiter -> engage auto switching
+    if current_mode == MODE_MD1_AUTO then
+      user_manual_althold = false
       auto_mode_engaged = true
-      gcs:send_text(0, "Auto mode ENGAGED (user set Loiter)")
-    elseif current_mode == COPTER_MODE_ALT_HOLD then
-      -- User manually selected AltHold -> disengage auto, use Source3
+      md1_auto_armed = true
+      if old_mode == MODE_MD1_MANUAL then
+        manual_to_auto_bridge = true
+        gcs:send_text(4, "md2: bridge AH+SRC3 until nav OK")
+      else
+        manual_to_auto_bridge = false
+      end
+      gcs:send_text(4, "md1: auto slot -> AltHold")
+    elseif current_mode == MODE_MD1_MANUAL then
+      user_manual_althold = true
       auto_mode_engaged = false
+      md1_auto_armed = false
+      manual_to_auto_bridge = false
       enter_althold_fallback_nav()
-      gcs:send_text(0, "Auto mode DISENGAGED (user set AltHold, EK3_SRC3+Src3)")
+      gcs:send_text(4, "md1: manual SRC3 (slot6)")
       return update, UPDATE_INTERVAL_MS
-    else
-      -- User switched to some other mode -> disengage auto
+    elseif (current_mode ~= COPTER_MODE_ALT_HOLD) and (current_mode ~= COPTER_MODE_LOITER) and
+           (current_mode ~= MODE_MD1_AUTO) and (current_mode ~= MODE_MD1_MANUAL) then
+      user_manual_althold = false
       auto_mode_engaged = false
+      md1_auto_armed = false
+      manual_to_auto_bridge = false
       return update, UPDATE_INTERVAL_MS
+    end
+    if (old_mode == MODE_MD1_MANUAL) and (current_mode ~= MODE_MD1_MANUAL) then
+      user_manual_althold = false
     end
   end
 
-  -- If not in AltHold or Loiter, do nothing
+  -- Stay in md §1 manual slot (e.g. every frame while mode 6 active)
+  if current_mode == MODE_MD1_MANUAL then
+    user_manual_althold = true
+    auto_mode_engaged = false
+    md1_auto_armed = false
+    manual_to_auto_bridge = false
+    if source_prev ~= 2 then
+      enter_althold_fallback_nav()
+    end
+    return update, UPDATE_INTERVAL_MS
+  end
+
+  -- md §1 auto slot: try to leave mode 4 into AltHold so §4–§8 can run in 2/5
+  if current_mode == MODE_MD1_AUTO then
+    user_manual_althold = false
+    auto_mode_engaged = true
+    md1_auto_armed = true
+    if vehicle:set_mode(COPTER_MODE_ALT_HOLD) then
+      prev_user_mode = COPTER_MODE_ALT_HOLD
+    end
+    return update, UPDATE_INTERVAL_MS
+  end
+
   if (current_mode ~= COPTER_MODE_ALT_HOLD) and (current_mode ~= COPTER_MODE_LOITER) then
     return update, UPDATE_INTERVAL_MS
   end
 
   -- Diagnostics (compute whenever in AltHold/Loiter so periodic logs still run if auto is off)
-  local rf_alt_ok = rangefinder_alt_usable()
-  local gps_ok = gps_quality_ok(gps_speed_acc_thresh, gps_pos_acc_thresh, gps_min_sats)
-  local flow_ok = opticalflow_quality_ok(flow_quality_thresh, flow_innov_thresh)
-  local flow_and_rf_ok = flow_ok and rf_alt_ok
+  local gps_ok = gps_quality_ok(gps_speed_acc_thresh)
 
   local rngfnd_dist_m = 0
-  local rngfnd_max_m = 0
   local rngfnd_has_data = false
   if rangefinder:has_data_orient(RANGEFINDER_ROTATION) then
     rngfnd_has_data = true
     rngfnd_dist_m = rangefinder:distance_cm_orient(RANGEFINDER_ROTATION) * 0.01
-    rngfnd_max_m = rangefinder:max_distance_cm_orient(RANGEFINDER_ROTATION) * 0.01
   end
 
-  -- md §1: in Loiter at high altitude, GPS height requires GPS-quality and active GPS nav source.
-  local gps_nav_active = (source_prev == 0)
-  update_height_source_with_hysteresis(current_mode, gps_ok, gps_nav_active, rngfnd_has_data, rngfnd_dist_m, rngfnd_max_m)
+  local rf_status = rangefinder:status_orient(RANGEFINDER_ROTATION)
+  local rf_alt_ok = rngfnd_has_data and (rf_status == RF_STATUS_GOOD)
+  local flow_ok = opticalflow_quality_ok(flow_quality_thresh, flow_innov_thresh)
+  local flow_and_rf_ok = flow_ok and rf_alt_ok
 
   -- Periodic telemetry: severity 6 (INFO) is often hidden in MP/QGC; use 5 (NOTICE).
   if (now_ms - last_log_ms) >= LOG_INTERVAL_MS then
     last_log_ms = now_ms
 
     local primary = gps:primary_sensor()
-    local ok_sa, s_acc = gps:speed_accuracy(primary)
-    local ok_ha, h_acc = gps:horizontal_accuracy(primary)
-    local ok_va, v_acc = gps:vertical_accuracy(primary)
-    local n_sats = gps:num_sats(primary)
-    local pos_acc_str = "nil"
-    if (ok_ha and h_acc) and (ok_va and v_acc) then
-      pos_acc_str = string.format("%.2f", math.sqrt(h_acc * h_acc + v_acc * v_acc))
+    local h_acc = gps:horizontal_accuracy(primary)
+    local v_acc = gps:vertical_accuracy(primary)
+    local p_acc = nil
+    if (h_acc ~= nil) and (v_acc ~= nil) then
+      p_acc = math.sqrt(h_acc * h_acc + v_acc * v_acc)
     end
+    local h_str = (h_acc ~= nil) and string.format("%.1f", h_acc) or "-"
+    local v_str = (v_acc ~= nil) and string.format("%.1f", v_acc) or "-"
+    local p_str = (p_acc ~= nil) and string.format("%.1f", p_acc) or "-"
 
     local flow_q = 0
     if optical_flow then
       flow_q = optical_flow:quality()
     end
 
-    -- gcs:send_text(4, string.format(
-    --   "ek3as Src:%u Auto:%u Rng:%.1f/%.1f RfAlt:%s GPS:%s Flow:%s V:%d",
-    --   source_prev + 1,
-    --   auto_mode_engaged and 1 or 0,
-    --   rngfnd_dist_m,
-    --   rngfnd_max_m * RF_ALT_RATIO,
-    --   rf_alt_ok and "OK" or "NO",
-    --   gps_ok and "OK" or "BAD",
-    --   flow_and_rf_ok and "OK" or "BAD",
-    --   gps_vs_flow_vote
-    -- ))
-    -- gcs:send_text(4, string.format(
-    --   "ek3as Sats:%u SAcc:%s PAcc:%s FlowQ:%u",
-    --   n_sats,
-    --   ok_sa and s_acc and string.format("%.2f", s_acc) or "nil",
-    --   pos_acc_str,
-    --   flow_q
-    -- ))
-    -- 在这里打印光流的创新值
+    local innov_xy_str = "-"
     if optical_flow then
-      local innov, innov_var = ahrs:get_vel_innovations_and_variances_for_source(5)
+      local innov = ahrs:get_vel_innovations_and_variances_for_source(5)
       if innov then
         local xy_innov = math.sqrt(innov:x() * innov:x() + innov:y() * innov:y())
-        gcs:send_text(4, string.format("OptFlow Innovation: %.4f", xy_innov))
-      else
-        gcs:send_text(4, "OptFlow Innovation: nil")
+        innov_xy_str = string.format("%.3f", xy_innov)
       end
-    else
-      gcs:send_text(4, "OptFlow Not Available")
     end
+    local rf_str = rngfnd_has_data and string.format("%.1f", rngfnd_dist_m) or "-"
+
+    -- STATUSTEXT is 50 chars max; keep each line short for GCS display
+    -- gcs:send_text(4, "----------------------------------------")
+    -- gcs:send_text(4, string.format(
+    --   "gps H:%s V:%s P:%s vote:%d %s",
+    --   h_str,
+    --   v_str,
+    --   p_str,
+    --   gps_vs_flow_vote,
+    --   gps_ok and "OK" or "NO"
+    -- ))
+    -- gcs:send_text(4, string.format(
+    --   "flow Q:%u Inn:%s R:%s vote:%d %s",
+    --   flow_q,
+    --   innov_xy_str,
+    --   rf_str,
+    --   gps_vs_flow_vote,
+    --   flow_and_rf_ok and "OK" or "NO"
+    -- ))
+    -- local mode_str = (current_mode == COPTER_MODE_LOITER) and "Loit" or "AltH"
+    -- gcs:send_text(4, string.format(
+    --   "src/mode S:%u %s a:%u m:%u",
+    --   source_prev + 1,
+    --   mode_str,
+    --   auto_mode_engaged and 1 or 0,
+    --   user_manual_althold and 1 or 0
+    -- ))
   end
 
-  -- Only run voting / mode changes when user has engaged auto (switched to Loiter once)
-  if not auto_mode_engaged then
-    bad_nav_streak = 0
-    return update, UPDATE_INTERVAL_MS
-  end
-
-  -- md §2/§4: when both GPS and Flow+Rangefinder meet thresholds, always prefer SRC2 (flow)
-  if current_mode == COPTER_MODE_LOITER and flow_and_rf_ok and gps_ok then
-    set_source(1)
-    gps_vs_flow_vote = VOTE_COUNTER_MAX
-  end
-
-  -- When coming from manual AltHold fallback (SRC3), don't stay on SRC3 in auto Loiter path.
-  -- This also serves as an emergency escape: if voting can't accumulate because both sensors
-  -- were previously judged BAD, force a switch now using strict quality gates.
-  if current_mode == COPTER_MODE_LOITER and source_prev == 2 then
-    if flow_and_rf_ok then
+  -- Loiter voting / degrade only when auto is engaged. AltHold->Loiter retry still runs when a:0
+  -- so manual AltHold can recover into Loiter and re-engage (see set_mode success below).
+  if auto_mode_engaged then
+    -- md §4/§5: when both GPS and Flow+Rangefinder meet thresholds, always prefer SRC2 (flow)
+    if current_mode == COPTER_MODE_LOITER and flow_and_rf_ok and gps_ok then
       set_source(1)
-    elseif gps_ok then
-      set_source(0)
-    end
-  end
-
-  -- md §7: GPS source active but GPS degrades -> prefer flow when available
-  if current_mode == COPTER_MODE_LOITER and source_prev == 0 and (not gps_ok) and flow_and_rf_ok then
-    set_source(1)
-    -- Bias vote toward flow so we don't bounce back to GPS on the next frame.
-    gps_vs_flow_vote = math.min(gps_vs_flow_vote + 2, VOTE_COUNTER_MAX)
-  end
-
-  -- === AUTO MODE LOGIC (works disarmed on bench for tuning; dwell reduces chatter) ===
-  -- Vote: if both are good, flow branch runs first (md §2 dual-good -> flow). Dual-good also
-  -- forces SRC2 above; this updates vote for when only one sensor is good.
-  if flow_and_rf_ok then
-    gps_vs_flow_vote = math.min(gps_vs_flow_vote + 1, VOTE_COUNTER_MAX)
-  elseif gps_ok then
-    gps_vs_flow_vote = math.max(gps_vs_flow_vote - 1, -VOTE_COUNTER_MAX)
-  end
-
-  local voted_source = -1
-  if gps_vs_flow_vote <= -VOTE_COUNTER_MAX then
-    voted_source = 0
-  elseif gps_vs_flow_vote >= VOTE_COUNTER_MAX then
-    if flow_and_rf_ok then
-      voted_source = 1
-    end
-  end
-
-  if current_mode == COPTER_MODE_LOITER then
-    if (not gps_ok) and (not flow_and_rf_ok) then
-      bad_nav_streak = bad_nav_streak + 1
-    else
-      -- don't hard-reset on one good sample, otherwise noisy transitions can delay degrade indefinitely
-      bad_nav_streak = math.max(bad_nav_streak - 1, 0)
+      gps_vs_flow_vote = VOTE_COUNTER_MAX
     end
 
-    if bad_nav_streak >= DEGRADE_DWELL_TICKS then
-      if vehicle:set_mode(COPTER_MODE_ALT_HOLD) then
-        enter_althold_fallback_nav()
-        gcs:send_text(0, "Auto -> AltHold (GPS+Flow bad, EK3_SRC3+Src3)")
-        prev_user_mode = COPTER_MODE_ALT_HOLD
+    -- When coming from manual AltHold fallback (SRC3), don't stay on SRC3 in auto Loiter path.
+    if current_mode == COPTER_MODE_LOITER and source_prev == 2 then
+      if flow_and_rf_ok then
+        set_source(1)
+      elseif gps_ok then
+        set_source(0)
       end
-      bad_nav_streak = 0
     end
 
-    if voted_source >= 0 then
-      set_source(voted_source)
-      gps_nav_active = (source_prev == 0)
-      update_height_source_with_hysteresis(current_mode, gps_ok, gps_nav_active, rngfnd_has_data, rngfnd_dist_m, rngfnd_max_m)
+    -- md §8: GPS source active but GPS degrades -> prefer flow when available
+    if current_mode == COPTER_MODE_LOITER and source_prev == 0 and (not gps_ok) and flow_and_rf_ok then
+      set_source(1)
+      gps_vs_flow_vote = math.min(gps_vs_flow_vote + 2, VOTE_COUNTER_MAX)
     end
+
+    if flow_and_rf_ok then
+      gps_vs_flow_vote = math.min(gps_vs_flow_vote + 1, VOTE_COUNTER_MAX)
+    elseif gps_ok then
+      gps_vs_flow_vote = math.max(gps_vs_flow_vote - 1, -VOTE_COUNTER_MAX)
+    end
+
+    local voted_source = -1
+    if gps_vs_flow_vote <= -VOTE_COUNTER_MAX then
+      voted_source = 0
+    elseif gps_vs_flow_vote >= VOTE_COUNTER_MAX then
+      if flow_and_rf_ok then
+        voted_source = 1
+      end
+    end
+
+    if current_mode == COPTER_MODE_LOITER then
+      if (not gps_ok) and (not flow_and_rf_ok) then
+        bad_nav_streak = bad_nav_streak + 1
+      else
+        bad_nav_streak = math.max(bad_nav_streak - 1, 0)
+      end
+
+      if bad_nav_streak >= DEGRADE_DWELL_TICKS then
+        if vehicle:set_mode(COPTER_MODE_ALT_HOLD) then
+          enter_althold_fallback_nav()
+          gcs:send_text(0, "Auto -> AltHold (GPS+Flow bad, EK3_SRC3+Src3)")
+          prev_user_mode = COPTER_MODE_ALT_HOLD
+          -- Loiter voting block is for a:1; after script degrade, show a:0 (same as
+          -- md: AltHold->Loiter retry still runs when a:0). Do not set m:1 here or
+          -- we would block auto Loiter recovery until user selects Loiter again.
+          auto_mode_engaged = false
+        end
+        bad_nav_streak = 0
+      end
+
+      if voted_source >= 0 then
+        set_source(voted_source)
+      end
+    end
+  else
+    bad_nav_streak = 0
+  end
+
+  if (current_mode == COPTER_MODE_ALT_HOLD) or (current_mode == COPTER_MODE_LOITER) then
+    ensure_src12_posz_rangefinder()
   end
 
   if current_mode == COPTER_MODE_ALT_HOLD then
-    -- Requirement:
-    -- In AltHold, if Flow/GPS is available, switch EKF source first and keep
-    -- trying to enter Loiter. If both become unavailable, stay in AltHold SRC3.
+    if user_manual_althold then
+      -- md §1 mode 6: SRC3 only, no auto Loiter
+      return update, UPDATE_INTERVAL_MS
+    end
+    -- md §1: AltHold<->Loiter automation only after entering auto via mode 4
+    if not md1_auto_armed then
+      return update, UPDATE_INTERVAL_MS
+    end
+    -- md §2: manual(6)->auto(4): hold AltHold+SRC3 until §5 nav ready, then Loiter+SRC together
+    if manual_to_auto_bridge then
+      if source_prev ~= 2 then
+        enter_althold_fallback_nav()
+        return update, UPDATE_INTERVAL_MS
+      end
+      if (not flow_and_rf_ok) and (not gps_ok) then
+        return update, UPDATE_INTERVAL_MS
+      end
+      if not position_estimate_ready() then
+        return update, UPDATE_INTERVAL_MS
+      end
+      local bridge_src = -1
+      if flow_and_rf_ok then
+        bridge_src = 1
+      elseif gps_ok then
+        bridge_src = 0
+      end
+      if bridge_src < 0 then
+        return update, UPDATE_INTERVAL_MS
+      end
+      if source_prev ~= bridge_src then
+        set_source(bridge_src)
+        return update, UPDATE_INTERVAL_MS
+      end
+      if (now_ms - last_loiter_retry_ms) >= 1000 then
+        last_loiter_retry_ms = now_ms
+        if vehicle:set_mode(COPTER_MODE_LOITER) then
+          manual_to_auto_bridge = false
+          auto_mode_engaged = true
+          prev_user_mode = COPTER_MODE_LOITER
+          gcs:send_text(0, "md2: Loiter+SRC" .. (bridge_src == 0 and "1(GPS)" or "2(Flow)"))
+        end
+      end
+      return update, UPDATE_INTERVAL_MS
+    end
+    -- md §5: In AltHold with auto engaged, if Flow/GPS is available, switch EKF source then Loiter.
     local desired_source = -1
     if flow_and_rf_ok then
       desired_source = 1
@@ -497,7 +539,9 @@ function update()
     end
 
     if desired_source < 0 then
-      enter_althold_fallback_nav()
+      if auto_mode_engaged then
+        enter_althold_fallback_nav()
+      end
       return update, UPDATE_INTERVAL_MS
     end
 
@@ -514,6 +558,7 @@ function update()
       if (now_ms - last_loiter_retry_ms) >= 1000 then
         last_loiter_retry_ms = now_ms
         if vehicle:set_mode(COPTER_MODE_LOITER) then
+          auto_mode_engaged = true
           gcs:send_text(0, "Auto -> Loiter (source " .. (desired_source == 0 and "GPS" or "Flow") .. " ready)")
           prev_user_mode = COPTER_MODE_LOITER
         end
