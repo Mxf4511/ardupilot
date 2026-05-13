@@ -70,8 +70,8 @@ extern const AP_HAL::HAL &hal;
 #define SPL06_TEMPERATURE_RESULT_BIT_SHIFT     (1<<3)  // necessary for temperature oversampling > 8
 
 // Don't set oversampling higher than 8 or the measurement time will be higher than 20ms (timer period)
-#define SPL06_PRESSURE_OVERSAMPLING            16
-#define SPL06_TEMPERATURE_OVERSAMPLING         16
+#define SPL06_PRESSURE_OVERSAMPLING            8
+#define SPL06_TEMPERATURE_OVERSAMPLING         8
 
 #define SPL06_OVERSAMPLING_TO_REG_VALUE(n)     (ffs(n)-1)
 

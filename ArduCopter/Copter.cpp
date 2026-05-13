@@ -730,7 +730,8 @@ void Copter::one_hz_loop()
     custom_control.set_notch_sample_rate(AP::scheduler().get_filtered_loop_rate_hz());
 #endif
 
-//     // log current height and max descent speed once per second (when armed and PILOT_SPEED_DN used)
+    // log current height and max descent speed once per second (when armed and PILOT_SPEED_DN used)
+// #if HAL_LOGGING_ENABLED
 //     if (motors->armed() && (g2.pilot_speed_dn > 0)) {
 //         int32_t alt_cm = current_loc.alt;
 // #if AP_RANGEFINDER_ENABLED
@@ -739,10 +740,10 @@ void Copter::one_hz_loop()
 //             alt_cm = rngf_alt_cm;
 //         }
 // #endif
-//         打印当前高度和最大下降速度
 //         const float max_dn_cms = get_max_descent_speed_cms();
 //         gcs().send_text(MAV_SEVERITY_INFO, "DnSpd: alt=%ld cm max_dn=%.0f cm/s", (long)alt_cm, (double)max_dn_cms);
 //     }
+// #endif
 }
 
 void Copter::init_simple_bearing()

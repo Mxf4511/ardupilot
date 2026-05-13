@@ -128,6 +128,14 @@ void Copter::rotate_body_frame_to_NE(float &x, float &y)
 float Copter::get_max_descent_speed_cms() const
 {
     const float speed_dn = (g2.pilot_speed_dn > 0) ? (float)abs(g2.pilot_speed_dn) : (float)abs(g.pilot_speed_up);
+
+    // When PILOT_SPEED_DN is not explicitly set (defaults to 0), we bypass the 3-stage logic
+    // and return the fallback speed. This avoids unexpected behavior when the user has not
+    // configured the new parameters.
+    if (g2.pilot_speed_dn <= 0) {
+        return speed_dn;
+    }
+
     const float speed_dn_low = (float)abs(g2.pilot_speed_dn_low);
     const float alt_hi = (float)g2.pilot_dn_alt_high;
     const float alt_lo = (float)g2.pilot_dn_alt_low;
@@ -136,7 +144,7 @@ float Copter::get_max_descent_speed_cms() const
         return speed_dn;
     }
 
-    const float rel_alt_cm = (float)current_loc.alt;
+    const float rel_alt_cm = (float)inertial_nav.get_position_z_up_cm();
     bool rngf_valid = false;
     float rngf_alt_cm = 0.0f;
     int32_t rngf_alt_cm_i = 0;
@@ -150,7 +158,7 @@ float Copter::get_max_descent_speed_cms() const
 #endif
 
     // Helper: max descent speed for a given height using standard 3-stage (scenario a)
-    const auto speed_at_height = [&](float alt_cm) {
+    const auto speed_at_height = [&](float alt_cm) -> float {
         if (alt_cm >= alt_hi) {
             return speed_dn;
         }
@@ -160,11 +168,12 @@ float Copter::get_max_descent_speed_cms() const
         return linear_interpolate(speed_dn_low, speed_dn, alt_cm, alt_lo, alt_hi);
     };
 
-    // (c) Land higher than takeoff: rel_alt > rf_max and rangefinder valid -> use rangefinder height, linear from rf_max->PILOT_SPEED_DN to 0->PILOT_SPD_DN_LOW
+    // (c) Land higher than takeoff: rel_alt > rf_max and rangefinder valid -> use rangefinder height
 #if AP_RANGEFINDER_ENABLED
     if (rf_max_cm > 0.0f && rngf_valid && rel_alt_cm > rf_max_cm) {
         const float rngf_clamped = constrain_float(rngf_alt_cm, 0.0f, rf_max_cm);
-        return linear_interpolate(speed_dn_low, speed_dn, rngf_clamped, alt_lo, rf_max_cm);
+        const float alt_c = constrain_float(rngf_clamped, alt_lo, rf_max_cm);
+        return linear_interpolate(speed_dn_low, speed_dn, alt_c, alt_lo, rf_max_cm);
     }
 #endif
 
@@ -172,11 +181,11 @@ float Copter::get_max_descent_speed_cms() const
     const float alt_for_speed = rngf_valid ? rngf_alt_cm : rel_alt_cm;
     float speed = speed_at_height(alt_for_speed);
 
-    // (b) Land lower than takeoff: rel_alt < 70%*rf_max and rangefinder invalid -> clamp to speed at 70%*rf_max (do not reduce further)
+    // (b) Land lower than takeoff: rel_alt < 70%*rf_max and rangefinder invalid -> clamp
 #if AP_RANGEFINDER_ENABLED
     if (rf_max_cm > 0.0f && !rngf_valid && rel_alt_cm < 0.7f * rf_max_cm) {
-        const float speed_at_70 = speed_at_height(0.7f * rf_max_cm);
-        speed = MAX(speed, speed_at_70);
+        const float clamp_alt = constrain_float(0.7f * rf_max_cm, alt_lo, alt_hi);
+        speed = MAX(speed, speed_at_height(clamp_alt));
     }
 #endif
 

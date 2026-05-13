@@ -551,7 +551,8 @@ bool NavEKF3_core::readyToUseOptFlow(void) const
     }
 
     // We need stable roll/pitch angles and gyro bias estimates but do not need the yaw angle aligned to use optical flow
-    return (imuSampleTime_ms - flowMeaTime_ms < 200) && tiltAlignComplete && delAngBiasLearned;
+    // return (imuSampleTime_ms - flowMeaTime_ms < 200) && tiltAlignComplete && delAngBiasLearned;
+    return (imuSampleTime_ms - flowValidMeaTime_ms < 200) && tiltAlignComplete && delAngBiasLearned;
 }
 #endif  // EK3_FEATURE_OPTFLOW_FUSION
 
