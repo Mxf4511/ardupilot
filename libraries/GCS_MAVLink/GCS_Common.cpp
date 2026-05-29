@@ -2884,19 +2884,33 @@ void GCS_MAVLINK::send_opticalflow()
     }
 #endif
 
+    // // populate and send message
+    // mavlink_msg_optical_flow_send(
+    //     chan,
+    //     AP_HAL::millis(),
+    //     0, // sensor id is zero
+    //     flowRate.x,
+    //     flowRate.y,
+    //     flowRate.x - bodyRate.x,
+    //     flowRate.y - bodyRate.y,
+    //     optflow->quality(),
+    //     hagl,  // ground distance (in meters) set to zero
+    //     flowRate.x,
+    //     flowRate.y);
+
     // populate and send message
     mavlink_msg_optical_flow_send(
         chan,
         AP_HAL::millis(),
         0, // sensor id is zero
-        flowRate.x,
+        flowRate.x - bodyRate.x, //在微空上位机光流界面中未使用
+        flowRate.y - bodyRate.y, 
+        flowRate.x, //在微空上位机光流界面中为光流速率
         flowRate.y,
-        flowRate.x - bodyRate.x,
-        flowRate.y - bodyRate.y,
         optflow->quality(),
         hagl,  // ground distance (in meters) set to zero
-        flowRate.x,
-        flowRate.y);
+        bodyRate.x, //在微空上位机光流界面中为陀螺仪速率
+        bodyRate.y);
 }
 #endif  // AP_OPTICALFLOW_ENABLED
 

@@ -52,7 +52,7 @@ void AP_OpticalFlow_MAV::update(void)
     state.surface_quality = quality_sum / count;
 
     // calculate dt
-    const float dt = (latest_frame_us - prev_frame_us) * 1.0e-6;
+    float dt = (latest_frame_us - prev_frame_us) * 1.0e-6;
     prev_frame_us = latest_frame_us;
 
     // sanity check dt
@@ -61,9 +61,14 @@ void AP_OpticalFlow_MAV::update(void)
         const float flow_scale_factor_x = 1.0f + 0.001f * _flowScaler().x;
         const float flow_scale_factor_y = 1.0f + 0.001f * _flowScaler().y;
 
+        // // copy flow rates to state structure
+        // state.flowRate = { ((float)flow_sum.x / count) * flow_scale_factor_x * dt,
+        //                    ((float)flow_sum.y / count) * flow_scale_factor_y * dt };
         // copy flow rates to state structure
-        state.flowRate = { ((float)flow_sum.x / count) * flow_scale_factor_x * dt,
-                           ((float)flow_sum.y / count) * flow_scale_factor_y * dt };
+
+        
+        state.flowRate = { ((float)flow_sum.x / count) * flow_scale_factor_x,
+                           ((float)flow_sum.y / count) * flow_scale_factor_y };
 
         // copy average body rate to state structure
         state.bodyRate = { gyro_sum.x / gyro_sum_count, gyro_sum.y / gyro_sum_count };
@@ -99,8 +104,8 @@ void AP_OpticalFlow_MAV::handle_msg(const mavlink_message_t &msg)
     latest_frame_us = AP_HAL::micros64();
 
     // add sensor values to sum
-    flow_sum.x += packet.flow_x;
-    flow_sum.y += packet.flow_y;
+    flow_sum.x += packet.flow_rate_x;
+    flow_sum.y += packet.flow_rate_y;
     quality_sum += packet.quality;
     count++;
 

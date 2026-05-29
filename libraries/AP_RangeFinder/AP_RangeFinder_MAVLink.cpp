@@ -18,6 +18,9 @@
 #if AP_RANGEFINDER_MAVLINK_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Vehicle/AP_Vehicle.h>
+
+extern const AP_HAL::HAL& hal;
 
 /*
    Set the distance based on a MAVLINK message
@@ -33,6 +36,7 @@ void AP_RangeFinder_MAVLink::handle_msg(const mavlink_message_t &msg)
         distance_cm = packet.current_distance;
         _max_distance_cm = packet.max_distance;
         _min_distance_cm = packet.min_distance;
+        // _min_distance_cm = 0;
         sensor_type = (MAV_DISTANCE_SENSOR)packet.type;
         signal_quality = packet.signal_quality;
         if (signal_quality == 0) {
@@ -63,7 +67,7 @@ int16_t AP_RangeFinder_MAVLink::min_distance_cm() const
         // we assume if both of these are zero that we ignore both
         return params.min_distance_cm;
     }
-    if (params.min_distance_cm > _min_distance_cm) {
+    if (params.min_distance_cm >= _min_distance_cm) {
         return params.min_distance_cm;
     }
     return _min_distance_cm;
@@ -81,8 +85,18 @@ void AP_RangeFinder_MAVLink::update(void)
         state.distance_m = 0.0f;
         state.signal_quality_pct = RangeFinder::SIGNAL_QUALITY_UNKNOWN;
     } else {
-        state.distance_m = distance_cm * 0.01f;
         state.signal_quality_pct = signal_quality;
+        const uint16_t min_distance = min_distance_cm();
+        const AP_Vehicle *vehicle = AP::vehicle();
+        const bool near_ground = state.status == RangeFinder::Status::Good &&
+                                 state.distance_m <= MAX(min_distance * 0.01f, 0.10f);
+        
+        if (distance_cm <= min_distance && (((vehicle == nullptr) || !vehicle->get_likely_flying()) || near_ground)) {
+            state.distance_m = min_distance * 0.01f;
+            set_status(RangeFinder::Status::Good);
+            return;
+        }
+        state.distance_m = distance_cm * 0.01f;
         update_status();
     }
 }
