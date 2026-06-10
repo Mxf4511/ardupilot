@@ -52,7 +52,7 @@ void AP_OpticalFlow_MAV::update(void)
     state.surface_quality = quality_sum / count;
 
     // calculate dt
-    float dt = (latest_frame_us - prev_frame_us) * 1.0e-6;
+    const float dt = (latest_frame_us - prev_frame_us) * 1.0e-6;
     prev_frame_us = latest_frame_us;
 
     // sanity check dt
@@ -61,16 +61,12 @@ void AP_OpticalFlow_MAV::update(void)
         const float flow_scale_factor_x = 1.0f + 0.001f * _flowScaler().x;
         const float flow_scale_factor_y = 1.0f + 0.001f * _flowScaler().y;
 
-        // // copy flow rates to state structure
-        // state.flowRate = { ((float)flow_sum.x / count) * flow_scale_factor_x * dt,
-        //                    ((float)flow_sum.y / count) * flow_scale_factor_y * dt };
-        // copy flow rates to state structure
+        // scale and copy flow rates to state structure
+        // if using flow_rates these are in rad/s (as opposed to pixels) and do not need to be multiplied by dt
+        const float dt_used = flow_sum_is_rads ? 1.0f : dt;
+        state.flowRate = { ((float)flow_sum.x / count) * flow_scale_factor_x * dt_used,
+                           ((float)flow_sum.y / count) * flow_scale_factor_y * dt_used };
 
-        
-        state.flowRate = { ((float)flow_sum.x / count) * flow_scale_factor_x,
-                           ((float)flow_sum.y / count) * flow_scale_factor_y };
-
-        // copy average body rate to state structure
         state.bodyRate = { gyro_sum.x / gyro_sum_count, gyro_sum.y / gyro_sum_count };
 
         // we only apply yaw to flowRate as body rate comes from AHRS
@@ -103,14 +99,35 @@ void AP_OpticalFlow_MAV::handle_msg(const mavlink_message_t &msg)
     // ToDo: add jitter correction
     latest_frame_us = AP_HAL::micros64();
 
+    // use flow_rate_x/y fields if non-zero values are ever provided
+    if (!flow_sum_is_rads && (!is_zero(packet.flow_rate_x) || !is_zero(packet.flow_rate_y))) {
+        flow_sum_is_rads = true;
+        flow_sum.zero();
+        quality_sum = 0;
+        count = 0;
+    }
+
+    static uint32_t last_debug_ms;
+    const uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - last_debug_ms > 1000) {
+        last_debug_ms = now_ms;
+    }
+
     // add sensor values to sum
-    flow_sum.x += packet.flow_rate_x;
-    flow_sum.y += packet.flow_rate_y;
+    if (flow_sum_is_rads) {
+        // higher precision flow_rate_x/y fields are used
+        flow_sum.x += packet.flow_rate_x;
+        flow_sum.y += packet.flow_rate_y;
+    } else {
+        // lower precision flow_x/y fields are used
+        flow_sum.x += packet.flow_x;
+        flow_sum.y += packet.flow_y;
+    }
     quality_sum += packet.quality;
+    // quality_sum += 255;
     count++;
 
     // take sensor id from message
-    sensor_id = packet.sensor_id;
-}
+    sensor_id = packet.sensor_id;}
 
 #endif  // AP_OPTICALFLOW_MAV_ENABLED

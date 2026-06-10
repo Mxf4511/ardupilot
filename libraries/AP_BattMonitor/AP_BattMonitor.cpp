@@ -730,6 +730,7 @@ void AP_BattMonitor::read()
                 const uint64_t time_us = AP_HAL::micros64();
                 drivers[i]->Log_Write_BAT(i, time_us);
                 drivers[i]->Log_Write_BCL(i, time_us);
+                drivers[i]->Log_Write_BTR(i, time_us);
             }
 #endif
     }

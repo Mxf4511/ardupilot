@@ -74,6 +74,9 @@ protected:
     // return a scaler that should be multiplied by the battery's reported capacity numbers to arrive at the actual capacity in mAh
     virtual uint16_t get_capacity_scaler() const { return 1; }
 
+    // return a scaler for current readings (for batteries that report scaled values)
+    uint16_t get_current_scaler() const { return _scaler.get(); }
+
     // reads the temperature word from the battery
     virtual void read_temp(void);
 
@@ -104,6 +107,9 @@ protected:
     uint16_t _cycle_count = 0;      // number of cycles the battery has experienced. An amount of discharge approximately equal to the value of DesignCapacity.
     bool _has_cycle_count;          // true if cycle count has been retrieved from the battery
     bool _has_temperature;
+
+    AP_Int16 _scaler;               // scaler multiplier for reported capacity and current values
+    AP_Float _ltd_r;                // LTD tracking speed factor for time remaining estimation
 
     virtual void timer(void) = 0;   // timer function to read from the battery
 

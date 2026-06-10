@@ -28,6 +28,20 @@ const AP_Param::GroupInfo AP_BattMonitor_SMBus::var_info[] = {
     // @RebootRequired: True
     AP_GROUPINFO("I2C_ADDR", 11, AP_BattMonitor_SMBus, _address, AP_BATTMONITOR_SMBUS_I2C_ADDR),
 
+    // @Param: SCALE
+    // @DisplayName: Battery monitor reported value scaler
+    // @Description: Multiplier applied to the battery's reported capacity and current values. Use 2 if the battery reports half the actual values.
+    // @Range: 1 10
+    // @User: Advanced
+    AP_GROUPINFO("SCALE", 12, AP_BattMonitor_SMBus, _scaler, 1),
+
+    // @Param: LTD_R
+    // @DisplayName: LTD tracking speed factor
+    // @Description: Tracking speed factor (r) for the Linear Tracking Differentiator used in time remaining estimation. Smaller values give smoother tracking but slower response. Recommended range: 0.5-50.
+    // @Range: 0.01 10
+    // @User: Advanced
+    AP_GROUPINFO("LTD_R", 13, AP_BattMonitor_SMBus, _ltd_r, 10),
+
     // Param indexes must be between 10 and 19 to avoid conflict with other battery monitor param tables loaded by pointer
 
     AP_GROUPEND

@@ -4,7 +4,8 @@
 
 #define LOG_IDS_FROM_BATTMONITOR \
     LOG_BAT_MSG, \
-    LOG_BCL_MSG
+    LOG_BCL_MSG, \
+    LOG_BTR_MSG
 
 // @LoggerMessage: BAT
 // @Description: Gathered battery data
@@ -61,8 +62,40 @@ struct PACKED log_BCL {
     uint16_t cell_voltages[12]; // the format does not support more than 12 cells, the remaining cells are reported in the BCL2 message
 };
 
+// @LoggerMessage: BTR
+// @Description: Battery time remaining estimation debug data
+// @Field: TimeUS: Time since system startup
+// @Field: Inst: battery instance number
+// @Field: RCurr: raw current before scaling
+// @Field: SCurr: scaled current
+// @Field: FiltC: LTD filtered current (v1)
+// @Field: RemCap: remaining capacity (mAh)
+// @Field: B1: branch 1 time estimate (sec)
+// @Field: B2: branch 2 time estimate (sec)
+// @Field: W1: branch 1 weight
+// @Field: TRem: estimated time remaining (sec)
+// @Field: Fl: in flight flag
+// @Field: Conv: LTD converged flag
+struct PACKED log_BTR {
+    LOG_PACKET_HEADER;
+    uint64_t time_us;
+    uint8_t  instance;
+    float    raw_current;
+    float    scaled_current;
+    float    ltd_v1;
+    float    remaining_cap_mah;
+    float    branch1_est;
+    float    branch2_est;
+    float    w1;
+    uint32_t time_remaining;
+    uint8_t  in_flight;
+    uint8_t  ltd_converged;
+};
+
 #define LOG_STRUCTURE_FROM_BATTMONITOR        \
     { LOG_BAT_MSG, sizeof(log_BAT), \
         "BAT", "QBfffffcfBBB", "TimeUS,Inst,Volt,VoltR,Curr,CurrTot,EnrgTot,Temp,Res,RemPct,H,SH", "s#vvAaXOw%-%", "F-000C0?0000" , true },  \
     { LOG_BCL_MSG, sizeof(log_BCL), \
-        "BCL", "QBfHHHHHHHHHHHH", "TimeUS,Instance,Volt,V1,V2,V3,V4,V5,V6,V7,V8,V9,V10,V11,V12", "s#vvvvvvvvvvvvv", "F-0CCCCCCCCCCCC" , true },
+        "BCL", "QBfHHHHHHHHHHHH", "TimeUS,Instance,Volt,V1,V2,V3,V4,V5,V6,V7,V8,V9,V10,V11,V12", "s#vvvvvvvvvvvvv", "F-0CCCCCCCCCCCC" , true },  \
+    { LOG_BTR_MSG, sizeof(log_BTR), \
+        "BTR", "QBfffffffIBB", "TimeUS,Inst,RCurr,SCurr,FiltC,RemCap,B1,B2,W1,TRem,Fl,Conv", "s#AAAOssss--%", "F-0000000C--" , true },

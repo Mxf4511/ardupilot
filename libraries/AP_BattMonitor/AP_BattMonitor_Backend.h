@@ -88,6 +88,7 @@ public:
     // logging functions 
     void Log_Write_BAT(const uint8_t instance, const uint64_t time_us) const;
     void Log_Write_BCL(const uint8_t instance, const uint64_t time_us) const;
+    virtual void Log_Write_BTR(const uint8_t instance, const uint64_t time_us) const {}
 
     // set desired MPPT powered state (enabled/disabled)
     virtual void mppt_set_powered_state(bool power_on) {};
