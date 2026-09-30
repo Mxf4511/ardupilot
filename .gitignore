@@ -194,3 +194,12 @@ autotest_result_*_junit.xml
 设备参数/重置参数后高度不飘_2026-02-28.param
 .clangd
 设备参数/ardupilot_param.param
+参考代码/drv_PAA3905.c
+飞机参数/无穹御4动力套_飞行姿态不正常.param
+飞机参数/无穹御4动力套_飞行姿态不正常.param:Zone.Identifier
+飞机参数/A6御4pro动力套_Lidar_ArduCopterv4.6.3-0.1.2_2026-5-22_filtered.param
+飞机参数/DVT2_3#_备份_V0.0.4_filtered.param
+飞机参数/DVT2_6#备份_0.0.6_filtered.param
+飞机参数/MATEKH743_Copter_ArduCopterv4.6.3.param
+飞机参数/MATEKH743_Copter_ArduCopterv4.6.3.param:Zone.Identifier
+飞机参数/mavlink参数表.param
